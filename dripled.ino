@@ -5,21 +5,23 @@
 MPU6050 accelgyro;
 LedControl lc=LedControl(12,10,11,1);
 
-#define SIZEX 6
-#define SIZEY 6
+#define FIXED
 
-class vec
+#define SIZEX 8
+#define SIZEY 8
+
+template <typename T> class vec
 {
-  float x_;
-  float y_;
+  T x_;
+  T y_;
 
 public:
   vec() : x_{0}, y_{0} {}
-  vec( int16_t x, int16_t y ) : x_{(float)x}, y_{(float)y} {}
-  vec( float x, float y ) : x_{x}, y_{y} {}
+  vec( int16_t x, int16_t y ) : x_{(T)x}, y_{(T)y} {}
+  vec( T x, T y ) : x_{x}, y_{y} {}
 
-  float x() const { return x_; }
-  float y() const { return y_; }
+  T x() const { return x_; }
+  T y() const { return y_; }
 
   vec operator+( const vec&o ) const
   {
@@ -33,26 +35,26 @@ public:
     return *this;
   }
 
-  vec operator*( float v ) const
+  vec operator*( T v ) const
   {
     return vec{ x()*v, y()*v };
   }
 
-  vec operator*=( float v )
+  vec operator*=( T v )
   {
     x_ *= v;
     y_ *= v;
     return *this;
   }
 
-  vec operator/( float v ) const
+  vec operator/( T v ) const
   {
-    if (x_==0 && y_==0)
+    if (x_==T{0} && y_==T{0})
       return *this;
     return vec{ x()/v, y()/v };
   }
 
-  vec operator/=( float v )
+  vec operator/=( T v )
   {
     if (x_==0 && y_==0)
       return *this;
@@ -61,29 +63,123 @@ public:
     return *this;
   }
 
-  float norm() const
+  T norm() const
   {
-    return sqrt( x()*x()+y()*y() );
+    return T{ sqrt( x()*x()+y()*y() ) };
   }
 };
+
+#ifdef FIXED
+
+#define SCALEf 256.0
+
+class fixed
+{
+  union
+  {
+    int16_t v_;
+    struct
+    {
+      uint8_t l;
+      int8_t h;
+    };
+  };
+
+  void check() const
+  {
+    if (fabs(v_)>65536) Serial.println( "OVERFLOW" );
+  }
+public:
+  fixed() : v_{0} {}
+  
+  explicit fixed( float f ) : v_{ f*SCALEf } {}
+
+  bool operator==( const fixed &o ) const { return v_==o.v_; }
+
+  fixed operator+( const fixed &o ) const { fixed r; r.v_ = v_+o.v_; check(); return r; }
+
+  fixed operator+=( const fixed &o ) { v_ += o.v_; check(); return *this; }
+
+//  fixed operator+=( double v ) { v_ += v*SCALEf; check(); return *this; }
+  
+
+  fixed operator-( const fixed &o ) const { fixed r; r.v_ = v_-o.v_; check(); return r; }
+  
+  fixed operator-( void ) const { fixed r; r.v_ = -v_; check(); return r; }
+
+  fixed operator-=( const fixed &o ) { v_ -= o.v_; check(); return *this; }
+
+//  fixed operator-=( double v ) { v_ -= v*SCALEf; check(); return *this; }
+  
+  fixed operator*( double v ) const { fixed r; r.v_ = v_*v; check(); return r; }
+  
+//  fixed operator*( fixed o ) { fixed r; r.v_ = (v_/SCALEf)*o.v_; check(); return r; }
+  fixed operator*( const fixed &o ) const
+  {
+//    int8_t h0 = h;
+//    uint8_t l0 = l;
+//
+//    int8_t h1 = o.h;
+//    uint8_t l1 = o.l;
+//
+//    uint16_t v = 0;
+//
+//    if (l0 && l1)
+//      v += (l0*l1)>>8;
+//    if (l0 && h1)
+//      v += l0*h1;
+//    if (h0 && l1)
+//      v += h0*l1;
+//    if (h0 && h1)
+//      v += (h0*h1)<<8;
+//    
+    long v = v_;
+    v *= o.v_;
+    v >>= 8;
+    fixed r;
+    r.v_ = v;
+    check();
+    return r;
+  }
+
+  fixed operator*=( double v ) { v_ *= v; check(); return *this; }
+ 
+  fixed operator/( double v ) const { fixed r; r.v_ = v_/v; check(); return r; }
+  
+  fixed operator/( const fixed &o ) const { fixed r; r.v_ = v_*SCALEf/o.v_; check(); return r; }
+  
+  fixed operator/=( double v ) { v_ /= v; check(); return *this; }
+  
+//  bool operator>( int v ) { return v_ > v*SCALEf; }
+
+  bool operator>( const fixed &o ) const { return v_ > o.v_; }
+
+  operator float() const { return v_/SCALEf; }
+
+};
+
+#else
+
+typedef float fixed;
+
+#endif
+
+typedef vec<fixed> fixed_vec;
+
 
 bool insidex( int i ) { return (i>=0 && i<SIZEX); }
 bool insidey( int i ) { return (i>=0 && i<SIZEY); }
 
-void plot( const vec& p, bool on_off )
-{
-  lc.setLed(0,1+SIZEX-p.x(),1+SIZEY-p.y(),on_off);
-}
+const fixed MAX_MASS{1};
 
-#define MAX_MASS  1
 
 class field
 {
   struct
   {
-    float mass_;
-    vec speed_; 
-    float diff[4];    //  Diffusion
+    fixed mass_;
+    fixed_vec speed_; 
+    fixed diff[4];    //  Diffusion
   } elements_[SIZEX][SIZEY];
 
 public:
@@ -92,7 +188,7 @@ public:
     for (int x=0;x!=SIZEX;x++)
       for (int y=0;y!=SIZEY;y++)
       {
-        elements_[x][y] = {0.5,{0,0}};
+        elements_[x][y] = { fixed{0.5} ,{0,0}};
       }
 //    elements_[0][1] = {18,{0,0}};
 //    elements_[3][1] = {5,{0,0}};
@@ -102,10 +198,10 @@ public:
   {
     for (int x=0;x!=SIZEX;x++)
       for (int y=0;y!=SIZEY;y++)
-          plot( {x+.5f,y+.5f}, elements_[x][y].mass_>=0.5 );
+        lc.setLed(0,SIZEX-(x+.5),SIZEY-(y+.5),elements_[x][y].mass_>=0.5);
   }
 
-  void step( const vec &acc )
+  void step( const fixed_vec &acc )
   {
     int static dx[4] = { -1, 0, 1, 0 };
     int static dy[4] = {  0, 1, 0,-1 };
@@ -120,22 +216,24 @@ public:
         if (e.speed_.norm()>1)
            e.speed_/=e.speed_.norm();
 
-        auto m = e.mass_;
-        auto s = e.speed_;
+        fixed m = e.mass_;
+        fixed_vec s = e.speed_;
 
           //  Basic diffusion
-        auto a = s.norm()/(fabs(s.x())+fabs(s.y()));
+        fixed a = s.norm()/(fabs(s.x())+fabs(s.y()));
         for (int d = 0;d!=4;d++)
         {
-            e.diff[d] = 0.01*m;
+            e.diff[d] = m*0.01;
 //            e.diff[d] = 0;
         }
 
+       auto tmp = a*m*0.99;
+
           //  Movment of mass due to speed
-        if (s.x()<0) e.diff[0] += -s.x()*0.99*a*m;
-        if (s.y()>0) e.diff[1] += s.y()*0.99*a*m;
-        if (s.x()>0) e.diff[2] += s.x()*0.99*a*m;
-        if (s.y()<0) e.diff[3] += -s.y()*0.99*a*m;
+        if (s.x()<0) e.diff[0] -= s.x()*tmp;
+        if (s.y()>0) e.diff[1] += s.y()*tmp;
+        if (s.x()>0) e.diff[2] += s.x()*tmp;
+        if (s.y()<0) e.diff[3] -= s.y()*tmp;
 
           //  Don't move mass outside of the field
         for (int d = 0;d!=4;d++)
@@ -143,7 +241,7 @@ public:
           int nx = x + dx[d];
           int ny = y + dy[d];
           if (!insidex(nx) || !insidey(ny))
-             e.diff[d] = 0;
+             e.diff[d] = fixed{0};
         }
       }
 
@@ -151,7 +249,7 @@ public:
     for (int x=0;x!=SIZEX;x++)
       for (int y=0;y!=SIZEY;y++)
       {
-        vec toto;
+        fixed_vec toto;
         
         for (int d = 0;d!=4;d++)
         {
@@ -167,17 +265,22 @@ public:
             e1.mass_ += e.diff[d];
             if (e1.mass_>MAX_MASS)
             {
-              e.diff[d] -= e1.mass_-MAX_MASS;
+              e.diff[d] -= e1.mass_- MAX_MASS;
               e1.mass_ = MAX_MASS;
             }
             e.mass_ -= e.diff[d];
             if (e.mass_<0)
+              e.mass_ = fixed{0};  //  ####
+
+            if (e.mass_<0)
             {
-              Serial.print( "ERROR : " );
+              Serial.print( "ERROR MASS : " );
+              Serial.print( e.mass_ );
+              Serial.print( "<0 SPEED : {" );
               Serial.print( e.speed_.x() );
               Serial.print( "," );
               Serial.print( e.speed_.y() );
-              Serial.print( " " );
+              Serial.print( "} DIFFS : " );
               for (int dd=0;dd!=4;dd++)
               {
                 Serial.print( e.diff[dd] );
@@ -187,7 +290,7 @@ public:
               Serial.println();
             }
           }
-          toto += vec{ dx[d], dy[d] }*e.diff[d];
+          toto += fixed_vec{ dx[d], dy[d] }*e.diff[d];
         }
       }
 
@@ -196,19 +299,19 @@ public:
       {
         auto &e = elements_[x][y];
 
-        vec out;
-        float delta_out_m = 0;
+        fixed_vec out;
+        fixed delta_out_m{ 0 };
         
         for (int d = 0;d!=4;d++)
         {
-          out += vec{ dx[d], dy[d] }*e.diff[d];
+          out += fixed_vec{ dx[d], dy[d] }*e.diff[d];
           delta_out_m  += e.diff[d];
         }
 
         out /= delta_out_m;
         
-        vec in;
-        float delta_in_m = 0;
+        fixed_vec in;
+        fixed delta_in_m{ 0 };
 
         for (int d = 0;d!=4;d++)
         {
@@ -218,7 +321,7 @@ public:
           {
             auto &e1 = elements_[nx][ny];
 
-            in += vec{ -dx[d], -dy[d] }*e1.diff[d];
+            in += fixed_vec{ -dx[d], -dy[d] }*e1.diff[d];
             delta_in_m  += e1.diff[d];
           }
         }
@@ -227,7 +330,6 @@ public:
           e.speed_ = (in+out*(e.mass_-delta_in_m))/e.mass_;
         else
           e.speed_ = {0,0};
-
       }
   }
 
@@ -286,17 +388,22 @@ void loop()
 {
   int16_t ax, ay, az;
   accelgyro.getAcceleration(&ax, &ay, &az);
-  vec acc{ ay, -az };
-  acc = acc/8000.0;
+  fixed_vec acc{ ay/8000, -az/8000 };
 
+//  world.debug();
+  auto start = millis();
   world.step( acc );
+  auto duration = millis()-start;
+//  Serial.print( duration );
+//  Serial.print( " " );
   world.display();
-
+//  duration = millis()-start;
+  Serial.println( duration );
+//  delay( 1000 );
  
 //  Serial.print("a/g:\t");
 //  Serial.print(ax); Serial.print(" \t");
 //  Serial.print(ay); Serial.print(" \t");
 //  Serial.print(az); Serial.println(" \t");
 }
-
 
