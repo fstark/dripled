@@ -1,6 +1,13 @@
+
+
 #include <I2Cdev.h>
 #include <MPU6050.h>
 #include <LedControl.h>
+
+extern "C"
+{
+  #include <avrfix.h>
+}
 
 MPU6050 accelgyro;
 LedControl lc=LedControl(12,10,11,1);
@@ -16,8 +23,8 @@ template <typename T> class vec
   T y_;
 
 public:
-  vec() : x_{0}, y_{0} {}
-  vec( int16_t x, int16_t y ) : x_{(T)x}, y_{(T)y} {}
+  vec() : x_{}, y_{} {} //  will fails for integral types, I guess
+///  vec( int16_t x, int16_t y ) : x_{(T)x}, y_{(T)y} {}
   vec( T x, T y ) : x_{x}, y_{y} {}
 
   T x() const { return x_; }
@@ -49,7 +56,7 @@ public:
 
   vec operator/( T v ) const
   {
-    if (x_==T{0} && y_==T{0})
+    if (x_==T{} && y_==T{}) //  Unsure if works with integral data types
       return *this;
     return vec{ x()/v, y()/v };
   }
@@ -69,30 +76,22 @@ public:
   }
 };
 
-#ifdef FIXED
-
-#define SCALEf 256.0
-
 class fixed
 {
-  union
-  {
-    int16_t v_;
-    struct
-    {
-      uint8_t l;
-      int8_t h;
-    };
-  };
+  sfix_t v_;
 
-  void check() const
-  {
-    if (fabs(v_)>65536) Serial.println( "OVERFLOW" );
-  }
+  void check() const {}
+
+static fixed from_fix( sfix_t fix ) { fixed v; v.v_= fix; return v; }
+
 public:
   fixed() : v_{0} {}
-  
-  explicit fixed( float f ) : v_{ f*SCALEf } {}
+
+  explicit fixed( int i ) : v_{ itosk(i) } {}
+
+  explicit fixed( float f ) : v_{ ftosk(f) } {}
+
+  operator float() const { return sktof(v_); }
 
   bool operator==( const fixed &o ) const { return v_==o.v_; }
 
@@ -100,78 +99,50 @@ public:
 
   fixed operator+=( const fixed &o ) { v_ += o.v_; check(); return *this; }
 
-//  fixed operator+=( double v ) { v_ += v*SCALEf; check(); return *this; }
-  
-
   fixed operator-( const fixed &o ) const { fixed r; r.v_ = v_-o.v_; check(); return r; }
   
   fixed operator-( void ) const { fixed r; r.v_ = -v_; check(); return r; }
 
   fixed operator-=( const fixed &o ) { v_ -= o.v_; check(); return *this; }
 
-//  fixed operator-=( double v ) { v_ -= v*SCALEf; check(); return *this; }
-  
-  fixed operator*( double v ) const { fixed r; r.v_ = v_*v; check(); return r; }
-  
-//  fixed operator*( fixed o ) { fixed r; r.v_ = (v_/SCALEf)*o.v_; check(); return r; }
-  fixed operator*( const fixed &o ) const
-  {
-//    int8_t h0 = h;
-//    uint8_t l0 = l;
-//
-//    int8_t h1 = o.h;
-//    uint8_t l1 = o.l;
-//
-//    uint16_t v = 0;
-//
-//    if (l0 && l1)
-//      v += (l0*l1)>>8;
-//    if (l0 && h1)
-//      v += l0*h1;
-//    if (h0 && l1)
-//      v += h0*l1;
-//    if (h0 && h1)
-//      v += (h0*h1)<<8;
-//    
-    long v = v_;
-    v *= o.v_;
-    v >>= 8;
-    fixed r;
-    r.v_ = v;
-    check();
-    return r;
-  }
-
-  fixed operator*=( double v ) { v_ *= v; check(); return *this; }
+//  fixed operator*( double v ) const { fixed r; r.v_ = smulskD(v_,v.v_); check(); return r; }
  
-  fixed operator/( double v ) const { fixed r; r.v_ = v_/v; check(); return r; }
-  
-  fixed operator/( const fixed &o ) const { fixed r; r.v_ = v_*SCALEf/o.v_; check(); return r; }
-  
-  fixed operator/=( double v ) { v_ /= v; check(); return *this; }
-  
-//  bool operator>( int v ) { return v_ > v*SCALEf; }
+  fixed operator*( const fixed &o ) const { fixed r; r.v_ = smulskD(v_,o.v_); check(); return r; }
 
+///  fixed operator*=( double v ) { v_ *= v; check(); return *this; }
+ 
+///  fixed operator/( double v ) const { fixed r; r.v_ = v_/v; check(); return r; }
+  
+  fixed operator/( const fixed o ) const { fixed r = fixed::from_fix(v_); r.v_ = sdivskD(v_,o.v_); check(); return r; }
+  
+  fixed operator/=( const fixed o ) { v_ = sdivskD(v_,o.v_); check(); return *this; }
+  
   bool operator>( const fixed &o ) const { return v_ > o.v_; }
 
-  operator float() const { return v_/SCALEf; }
-
+  friend fixed absolute( const fixed &v );
+  friend fixed sqrt( const fixed v );
 };
 
-#else
+fixed absolute( const fixed &v )
+{
+  fixed r;
+  r.v_ = v.v_>=0?v.v_:-v.v_;
+  return r;
+}
 
-typedef float fixed;
-
-#endif
+fixed sqrt( const fixed v )
+{
+  float f = v;
+  f = sqrt(f);
+  return fixed{f};
+}
 
 typedef vec<fixed> fixed_vec;
-
 
 bool insidex( int i ) { return (i>=0 && i<SIZEX); }
 bool insidey( int i ) { return (i>=0 && i<SIZEY); }
 
-const fixed MAX_MASS{1};
-
+const fixed MAX_MASS{1.f};
 
 class field
 {
@@ -188,7 +159,7 @@ public:
     for (int x=0;x!=SIZEX;x++)
       for (int y=0;y!=SIZEY;y++)
       {
-        elements_[x][y] = { fixed{0.5} ,{0,0}};
+        elements_[x][y] = { fixed{0.5f} ,{fixed{},fixed{}}};
       }
 //    elements_[0][1] = {18,{0,0}};
 //    elements_[3][1] = {5,{0,0}};
@@ -198,7 +169,10 @@ public:
   {
     for (int x=0;x!=SIZEX;x++)
       for (int y=0;y!=SIZEY;y++)
-        lc.setLed(0,SIZEX-(x+.5),SIZEY-(y+.5),elements_[x][y].mass_>=0.5);
+      {
+        auto mass = elements_[x][y].mass_;
+        lc.setLed(0,SIZEX-(x+.5),SIZEY-(y+.5),mass>0.5);
+      }
   }
 
   void step( const fixed_vec &acc )
@@ -213,27 +187,27 @@ public:
         auto &e = elements_[x][y];
         e.speed_ += acc;
 
-        if (e.speed_.norm()>1)
+        if (e.speed_.norm()>fixed{1.f})
            e.speed_/=e.speed_.norm();
 
         fixed m = e.mass_;
         fixed_vec s = e.speed_;
 
           //  Basic diffusion
-        fixed a = s.norm()/(fabs(s.x())+fabs(s.y()));
+        fixed a = s.norm()/(absolute(s.x())+absolute(s.y()));
         for (int d = 0;d!=4;d++)
         {
-            e.diff[d] = m*0.01;
+            e.diff[d] = m*fixed{0.01f};
 //            e.diff[d] = 0;
         }
 
-       auto tmp = a*m*0.99;
+       fixed tmp = a*m*fixed{0.99f};
 
           //  Movment of mass due to speed
-        if (s.x()<0) e.diff[0] -= s.x()*tmp;
-        if (s.y()>0) e.diff[1] += s.y()*tmp;
-        if (s.x()>0) e.diff[2] += s.x()*tmp;
-        if (s.y()<0) e.diff[3] -= s.y()*tmp;
+        if (s.x()<fixed{}) e.diff[0] -= s.x()*tmp;
+        if (s.y()>fixed{}) e.diff[1] += s.y()*tmp;
+        if (s.x()>fixed{}) e.diff[2] += s.x()*tmp;
+        if (s.y()<fixed{}) e.diff[3] -= s.y()*tmp;
 
           //  Don't move mass outside of the field
         for (int d = 0;d!=4;d++)
@@ -241,7 +215,7 @@ public:
           int nx = x + dx[d];
           int ny = y + dy[d];
           if (!insidex(nx) || !insidey(ny))
-             e.diff[d] = fixed{0};
+             e.diff[d] = fixed{};
         }
       }
 
@@ -259,7 +233,7 @@ public:
           auto &e = elements_[x][y];
 
           //  Update mass
-          if (e.diff[d]>0)
+          if (e.diff[d]>fixed{})
           {
             auto &e1 = elements_[nx][ny];
             e1.mass_ += e.diff[d];
@@ -270,7 +244,7 @@ public:
             }
             e.mass_ -= e.diff[d];
             if (e.mass_<0)
-              e.mass_ = fixed{0};  //  ####
+              e.mass_ = fixed{};  //  ####
 
             if (e.mass_<0)
             {
@@ -290,7 +264,7 @@ public:
               Serial.println();
             }
           }
-          toto += fixed_vec{ dx[d], dy[d] }*e.diff[d];
+          toto += fixed_vec{ fixed{dx[d]}, fixed{dy[d]} }*e.diff[d];
         }
       }
 
@@ -300,18 +274,18 @@ public:
         auto &e = elements_[x][y];
 
         fixed_vec out;
-        fixed delta_out_m{ 0 };
+        fixed delta_out_m{};
         
         for (int d = 0;d!=4;d++)
         {
-          out += fixed_vec{ dx[d], dy[d] }*e.diff[d];
+          out += fixed_vec{ fixed{dx[d]}, fixed{dy[d]} }*e.diff[d];
           delta_out_m  += e.diff[d];
         }
 
         out /= delta_out_m;
         
         fixed_vec in;
-        fixed delta_in_m{ 0 };
+        fixed delta_in_m{};
 
         for (int d = 0;d!=4;d++)
         {
@@ -321,7 +295,7 @@ public:
           {
             auto &e1 = elements_[nx][ny];
 
-            in += fixed_vec{ -dx[d], -dy[d] }*e1.diff[d];
+            in += fixed_vec{ fixed{-dx[d]}, fixed{-dy[d]} }*e1.diff[d];
             delta_in_m  += e1.diff[d];
           }
         }
@@ -329,7 +303,7 @@ public:
         if (e.mass_!=0)
           e.speed_ = (in+out*(e.mass_-delta_in_m))/e.mass_;
         else
-          e.speed_ = {0,0};
+          e.speed_ = {fixed{}, fixed{}};
       }
   }
 
@@ -388,18 +362,15 @@ void loop()
 {
   int16_t ax, ay, az;
   accelgyro.getAcceleration(&ax, &ay, &az);
-  fixed_vec acc{ ay/8000, -az/8000 };
+  fixed_vec acc{ fixed{ ay/8000 }, fixed{ -az/8000 } };
 
 //  world.debug();
-  auto start = millis();
+//  auto start = millis();
   world.step( acc );
-  auto duration = millis()-start;
-//  Serial.print( duration );
-//  Serial.print( " " );
+//  auto duration = millis()-start;
   world.display();
 //  duration = millis()-start;
-  Serial.println( duration );
-//  delay( 1000 );
+//  Serial.println( duration );
  
 //  Serial.print("a/g:\t");
 //  Serial.print(ax); Serial.print(" \t");
