@@ -153,6 +153,12 @@ class field
     fixed diff[4];    //  Diffusion
   } elements_[SIZEX][SIZEY];
 
+  //  We age the cells, and only turn them on when they are 4 cycles old
+  //  We also turn them off when they go back to zero.
+  //  This helps reduce flicker (note: with max_age==2 we could do this with a single bit per pixel)
+static const int max_age = 2;
+  uint8_t age[8][8];
+
 public:
   field()
   {
@@ -160,9 +166,8 @@ public:
       for (int y=0;y!=SIZEY;y++)
       {
         elements_[x][y] = { fixed{0.5f} ,{fixed{},fixed{}}};
+        age[x][y] = 0;
       }
-//    elements_[0][1] = {18,{0,0}};
-//    elements_[3][1] = {5,{0,0}};
   }
 
   void display()
@@ -171,7 +176,15 @@ public:
       for (int y=0;y!=SIZEY;y++)
       {
         auto mass = elements_[x][y].mass_;
-        lc.setLed(0,SIZEX-(x+.5),SIZEY-(y+.5),mass>0.5);
+        bool state = mass>0.5;
+        if (!state && age[x][y]>0)
+          age[x][y]--;
+        if (state && age[x][y]<max_age)
+          age[x][y]++;
+        if (age[x][y]==0)
+          lc.setLed(0,SIZEX-(x+.5),SIZEY-(y+.5),false);
+        if (age[x][y]==max_age)
+          lc.setLed(0,SIZEX-(x+.5),SIZEY-(y+.5),true);
       }
   }
 
